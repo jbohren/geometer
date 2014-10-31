@@ -5,11 +5,20 @@ import PyKDL as kdl
 import numpy as np
 import distmesh as dm
 
+from tf_conversions import posemath as pm
+
 import rospy
 
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Pose, Point, Quaternion, Vector3
 from std_msgs.msg import ColorRGBA
+
+def hat(v):
+    """Skew-symmetric operator"""
+    return np.array([
+        [   0.0, -v[2],  v[1]],
+        [  v[2],   0.0, -v[0]],
+        [ -v[1],  v[0],   0.0]])
 
 def proj(n, p, q):
     """Projects vector q onto plane n at point p"""
@@ -27,6 +36,7 @@ class Geometer(object):
         self.points = {}
         self.lines = {}
         self.planes = {}
+        self.circles = {}
 
         self.marker_array = MarkerArray()
 
@@ -47,7 +57,7 @@ class Geometer(object):
             self.rate.sleep()
 
     def publish(self):
-        self.marker_array.markers = self.points.values() + self.lines.values() + self.planes.values()
+        self.marker_array.markers = self.points.values() + self.lines.values() + self.planes.values() + self.circles.values()
         for m in self.marker_array.markers:
             m.header.stamp = rospy.Time.now()
         self.pub.publish(self.marker_array)
@@ -107,7 +117,7 @@ class Geometer(object):
 
         return key
 
-    def plane(self, frame_id, p, n, r=1.0, c=(0.0,0.0), key=None, draw_triad=False):
+    def plane(self, frame_id, p, n, r=1.0, key=None, draw_triad=False):
         """
         plane: n . ( X - p ) = 0
 
@@ -133,31 +143,26 @@ class Geometer(object):
             kdl.Vector(*ny),
             kdl.Vector(*nz))
 
-        # offset for in-plane circle position
-        c3 = np.array(list(kdl.Vector(c[0],c[1],0.0)))
-        c3 = c3 - np.inner(c3,n)*n
+        # define the pose of the plane marker 
+        m.pose = Pose(Point(*(p)), Quaternion(*R.GetQuaternion()))
+        m.scale = Vector3(1, 1, 1)
+
+        # flatten the triangle list
+        for triangle in self.mesh_t:
+            m.points.extend([
+                Point(r*self.mesh_p[t][0],r*self.mesh_p[t][1],0)
+                for t in triangle])
+
+        m.color = ColorRGBA(0.8,0,0.8,0.9)
+        m.colors = [m.color] * len(m.points)
 
         if draw_triad:
             self.line(frame_id, p, nx, t=[0.0,r],key=key+'-x')
             self.line(frame_id, p, ny, t=[0.0,r],key=key+'-y')
             self.line(frame_id, p, nz, t=[0.0,r],key=key+'-z')
 
-            self.point(frame_id, p+c3, 0.005, key=key+'-center-point')
+            self.point(frame_id, p, 0.005, key=key+'-center-point')
 
-        m.pose = Pose(Point(*(p+c3)), Quaternion(*R.GetQuaternion()))
-
-        m.scale = Vector3(1, 1, 1)
-
-        # TODO: precompute plane
-
-        # flatten the triangle list
-        for triangle in self.mesh_t:
-            m.points.extend([
-                Point(r*self.mesh_p[p][0],r*self.mesh_p[p][1],0)
-                for p in triangle])
-
-        m.color = ColorRGBA(0.8,0,0.8,0.9)
-        m.colors = [m.color] * len(m.points)
 
         key = key or element_key(m)
 
@@ -165,3 +170,4 @@ class Geometer(object):
             self.planes[key] = m
 
         return key
+
